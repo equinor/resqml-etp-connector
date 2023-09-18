@@ -1,0 +1,1 @@
+set PYTHONPATH=q:\ETP\etpclient-python-EQ;%PYTHONPATH%

@@ -1,2 +1,20 @@
-# resqml-etp-connector
-Python code to demonstrate transfer of RESQML objects using ETP
+# Resqml ETP Connection experiment
+Python code to demonstrate creation and transfer of a RESQML object using Energistics Transfer Protocol (ETP).
+The code demonstrate the following:
+* convert a xtgeo .gri file to a RESQML Grid2dRepresentation object using resqpy
+* upload this RESQML object to a OSDU/RDDMS server using the ETP protocol. This uses a modified version of the Geosiris ETP stack (etpclient-python, etpproto-python, etptypes)
+* download the RESQML object from the RDDMS server using the ETP protocol.  This uses the REST API provided by the open-etp-client library.
+* read the downloaded data using resqpy to complete the data round-trip.
+* assert that the round-tripped data is unchanged.
+
+## Setup
+The setup sequence below is to be verified:
+- install resqpy using pip
+- install the requirements of etpclient-python
+    - etpclient-python uses poetry. One option is to manually pip-install its requirements(?)
+- obtain the patched version of etpclient-python and add it to PYTHONPATH
+    - not yet pushed to EQ GitHub
+    - once obtained the patched etpclient-python, add it in front of PYTHONPATH to override any existing installed version
+
+## Run the code
+Locate a xtgeo .gri file to be used in the test.  Update the input file .gri location at the top of the example code file resqpy_grid2d_roundtrip.py.  Run the code in resqpy_grid2d_roundtrip.py and verify the individual steps manually. 
