@@ -13,8 +13,8 @@ The setup sequence below is to be verified:
 - install the requirements of etpclient-python
     - etpclient-python uses poetry. One option is to manually pip-install its requirements(?)
 - obtain the patched version of etpclient-python and add it to PYTHONPATH
-    - not yet pushed to EQ GitHub
-    - once obtained the patched etpclient-python, add it in front of PYTHONPATH to override any existing installed version
+    - The patches are hosted in the [Equinor fork of etpclient-python](https://github.com/equinor/etpclient-python/tree/modifications_for_Grid2d_test).
+    - Add the patched etpclient-python in front of your PYTHONPATH to prefer it over any existing installed version.
 
 ## Run the code
 Locate a xtgeo .gri file to be used in the test.  Update the input file .gri location at the top of the example code file resqpy_grid2d_roundtrip.py.  Run the code in resqpy_grid2d_roundtrip.py and verify the individual steps manually. 
