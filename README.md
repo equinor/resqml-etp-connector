@@ -3,7 +3,7 @@ Python code to demonstrate creation and transfer of a RESQML object using Energi
 The code does the following:
 * convert a xtgeo .gri file to a RESQML Grid2dRepresentation object using [resqpy](https://github.com/bp/resqpy)
 * upload this RESQML object to a OSDU/RDDMS server using the ETP protocol. This uses a modified version of the Geosiris ETP stack (etpclient-python, etpproto-python, etptypes).
-* download the RESQML object from the RDDMS server using the ETP protocol.  This uses the REST API provided by the open-etp-client library.
+* download the RESQML object from the RDDMS server using the ETP protocol.  This uses the same modified version of the Geosiris ETP stack (etpclient-python, etpproto-python, etptypes).
 * read the downloaded data using resqpy to complete the data round-trip.
 * assert that the round-tripped data is unchanged.
 

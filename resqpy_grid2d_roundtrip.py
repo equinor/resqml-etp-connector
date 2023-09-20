@@ -12,7 +12,7 @@ import resqpy.surface as rs
 
 from xtgeo.surface import RegularSurface
 
-from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addDataspace, putDataObject, putDataObjectArray
+from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addDataspace, putDataObject, putDataObjectArray, getResources, getDataObject, getDataArray
 
 
 
@@ -28,6 +28,8 @@ di, dj = mysurf.xinc, mysurf.yinc
 z = mysurf.values.data
 #
 
+# ni,nj = 10,5
+# z = np.random.rand(nj,ni)
 
 #
 # Initialize a new resqpy model
@@ -87,6 +89,7 @@ mesh_uuid = model2.uuid(obj_type = 'Grid2dRepresentation', title = 'test_from_gr
 # jwt_token = None
 jwt_token = "..."  # get token from azure CLI.  User must be part of the AAD group "rddms-users"
 
+
 args = {
     'host': 'interop-rddms.azure-api.net',
     'port': '443',
@@ -124,11 +127,13 @@ pdo = asyncio.run(
 # create a etpproto-specific dict for the "put data object array" call
 # TODO: improce the XML parsing here..
 #
-pathInResource = model2.roots()[1].getchildren()[3].getchildren()[3].getchildren()[1].getchildren()[1].getchildren()[0].getchildren()[0].text
+pathInResource = model2.roots()[1][3][3][1][1][0][0].text
 
 url = f'eml:///dataspace(\'{dataspace}\')/eml20.EpcExternalPartReference({str(mesh.uuid)})'
-dims = list(mysurf.values.data.shape)
-vals = mysurf.values.data.flatten().tolist()
+# dims = list(mysurf.values.data.shape)
+# vals = mysurf.values.data.flatten().tolist()
+dims = list(z.shape)
+vals = z.flatten().tolist()
 put_array_dict = {'dataArrays': {'0': {'uid': {'uri': url, 'pathInResource': pathInResource}, 'array': {'dimensions': dims, 'data':{'item':{'values': vals }}}, 'customData':{}}}}
 
 pdoa = asyncio.run(
@@ -137,93 +142,87 @@ pdoa = asyncio.run(
 
 
 
-
-
 #
-# read data back in, using open-etp-client REST API;  write the resulting data into .epc and .h5 files
+# read data back in using etpclient-python;  write the resulting data into .epc and .h5 files
 #
 
-import urllib
-import requests
+import urllib.parse    
 import zipfile
 import h5py
-
-url0 = 'http://localhost:9003/Reservoir/v2'  # address of open-etp-client REST API server 
-
-auth = f'Bearer {jwt_token if jwt_token is not None else "xxx"}'
-headers = {'content-type': 'application/json', 'Authorization': auth}
-
-ds = urllib.parse.quote(dataspace, safe="")   # DataSpace 
+from lxml import etree
 
 guid4 = str(mesh_uuid)  # Guid of target object
 dot4 = 'resqml20.obj_Grid2dRepresentation'   # data object type of target object
-
-url4 = '/dataspaces/'+ds+'/resources/'+dot4+'/'+guid4
-
 obj_type_label = dot4.split('.')[1]
 part_name = f'{obj_type_label}_{guid4}'
-
-r = requests.get(url0+url4+"?$format=xml", headers=headers)
-object_xml =  r.text.replace('</DataObjects>','').replace('<DataObjects>','')
-
 epc_out_file = 'test1-returned'
 part_names = []
+PathInHdfFile = ""
+res2 = None
 
-# 
-# Create the .epc file; i.e. a zip archive containing multiple .xml files
-#
-with zipfile.ZipFile(epc_out_file+'.epc', 'w') as myzip:
-    myzip.writestr(part_name+".xml", object_xml)
-part_names.append(part_name)
+gds = asyncio.run( getDataspaces(wsm) )
+for ii,ds in enumerate(gds):
+    if (dataspace == ds.path):
+        res0 = asyncio.run( getResources(wsm, ds.uri) )
+        # print("res0", type(res0))
+        for res in res0:
+            res1 = asyncio.run( getDataObject(wsm, res.uri ) )
+            vv = list(res1.values())[0]
+            # print("res1[0]", type(vv), vv.resource, dir(vv))
+            if (guid4 in vv.resource.uri and 'Grid2dRepresentation' in vv.resource.uri):
+                object_xml_2 = vv.data
+                root = etree.fromstring(object_xml_2)
+                PathInHdfFile = root[3][3][1][1][0][0].text  # NOTE: same structure as line pathInResource above..
+                root[3][3][1][1].tag   ## references the name of the DataArray (should be ZValues)
+                uri = f'eml:///dataspace(\'{dataspace}\')/eml20.EpcExternalPartReference({str(mesh_uuid)})'
+                res2 = asyncio.run( getDataArray(wsm, uri, PathInHdfFile ) )
+                # print("mesh uuid", str(mesh_uuid))
+                # print("res2", type(res2) )
+                # print("res2", res2.shape )
 
+if len(PathInHdfFile)>0 and res2 is not None:
+    # 
+    # Create the .epc file; i.e. a zip archive containing multiple .xml files
+    #
+    with zipfile.ZipFile(epc_out_file+'.epc', 'w') as myzip:
+        myzip.writestr(part_name+".xml", object_xml_2)
+        part_names.append(part_name)
 
-r = requests.get(url0+url4+"/arrays?$format=json", headers=headers)    # read array information
-arrays_list = json.loads(r.text)
+    #
+    # Create a HDF5 file that contains the relevant arrays
+    #
+    with h5py.File(epc_out_file+'.h5', 'w') as h5f:
+        hdf5path = PathInHdfFile
+        dim = res2.shape
+        # array_np = np.reshape( np.array(array_data['data']['data']), dim )
+        h5f.create_dataset(hdf5path, data=res2)
 
-#
-# Create a HDF5 file that contains the relevant arrays
-#
-with h5py.File(epc_out_file+'.h5', 'w') as h5f:
-    for arr_info in arrays_list:
-        pir = arr_info['uid']['pathInResource']
-        pir = urllib.parse.quote(pir, safe="")
-        url5 = '/dataspaces/'+ds+'/resources/'+dot4+'/'+guid4+'/arrays/'+pir
-        r = requests.get(url0+url5+"?$format=json", headers=headers)  # read array content
-        array_data = json.loads(r.text)
-        hdf5path = array_data['uid']['pathInResource']
-        dim = np.array(array_data['data']['dimensions'])
-        array_np = np.reshape( np.array(array_data['data']['data']), dim )
-        h5f.create_dataset(hdf5path, data=array_np)
+    #
+    # The .epc file must contain a list of constitutent parts in XML format: write it here
+    #        
+    cts = []
+    cts.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+    cts.append('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">')
+    for pn in part_names:
+        obj_type_label = "_".join( pn.split("_")[:-1] )
+        ss = f'<Override PartName="/{pn}.xml" ContentType="application/x-resqml+xml;version=2.0;type={obj_type_label}"/>'
+        cts.append("   "+ss)
+    cts.append('</Types>')
 
-
-#
-# The .epc file must contain a list of constitutent parts in XML format: write it here
-#
-cts = []
-cts.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
-cts.append('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">')
-for pn in part_names:
-    obj_type_label = "_".join( pn.split("_")[:-1] )
-    ss = f'<Override PartName="/{pn}.xml" ContentType="application/x-resqml+xml;version=2.0;type={obj_type_label}"/>'
-    cts.append("   "+ss)
-cts.append('</Types>')
-
-# append our list of content to the .epc (zip) file
-with zipfile.ZipFile(epc_out_file+'.epc', 'a') as myzip:
-    myzip.writestr('[Content_Types].xml', "\n".join(cts))
-
+    # append our list of content to the .epc (zip) file
+    with zipfile.ZipFile(epc_out_file+'.epc', 'a') as myzip:
+        myzip.writestr('[Content_Types].xml', "\n".join(cts))
 
 
 #
 # Use resqpy to read the written RESQML model (.epc and .h5 file)
-# NOTE: this may require a patched version of resqpy
 #
 
-model = rq.Model(epc_out_file+".epc")
+model_out = rq.Model(epc_out_file+".epc")
 
-g = model.uuid(obj_type = 'Grid2dRepresentation')
+g = model_out.uuid(obj_type = 'Grid2dRepresentation')
 assert g==mesh_uuid
-m = rs.Mesh(model,g)  # reads the Grid2dRepresentation as a resqpy Mesh model, but does not yet load the array binary data
+m = rs.Mesh(model_out,g)  # reads the Grid2dRepresentation as a resqpy Mesh model, but does not yet load the array binary data
 m.full_array_ref()    # forces loading of array binary data (from .h5 file)
 # print(m.full_array.shape)  
 

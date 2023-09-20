@@ -113,3 +113,53 @@ async def putDataObjectArray(
     # async for msg_idx in res:
     #     print(msg_idx)
 
+
+async def getResources(
+    wsm, uri, depth=1,
+):
+    result = await wsm.send_and_wait(
+        get_resouces(
+            uri, 
+            depth
+        )
+    )
+    if result:
+        # pretty_p.pprint(result.body.__dict__)
+        # get_res_resp
+        pass
+    else:
+        print("No answer...")
+    return result
+
+
+async def getDataArray(
+    wsm, uri, pir
+):
+    get_data_arr = get_data_array( uri,pir )
+    print(f"\n\n{get_data_arr}\n\n")
+    result = await wsm.send_and_wait(get_data_arr)
+    return result
+
+async def getDataArrayMetadata(
+    wsm, uri, pir
+):
+    get_data_arr = get_data_array_metadata(uri, pir)
+    result = await wsm.send_and_wait(get_data_arr)
+    if result:
+        pass
+    else:
+        print("No answer...")
+
+async def getDataObject(
+    wsm, uri
+):
+    get_data_obj = get_data_object([uri])
+    # print("Sending : ", get_data_obj.__dict__)
+    result = await wsm.send_and_wait(get_data_obj)
+    if result:
+        print(type(result))
+        pass
+    else:
+        print("No answer...")
+    return result
+
