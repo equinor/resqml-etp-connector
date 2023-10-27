@@ -5,12 +5,13 @@ import time
 import json
 import argparse
 import pprint
+import pathlib
 
 import resqpy.model as rq
 import resqpy.crs as rcrs
 import resqpy.surface as rs
 
-from xtgeo.surface import RegularSurface
+import xtgeo
 
 from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addDataspace, putDataObject, putDataObjectArray, getResources, getDataObject, getDataArray
 
@@ -20,8 +21,11 @@ from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addD
 # Read the .gri file
 # NOTE: mysurf.yflip=1 means that positive z is down.  Not sure if/how this is to be indicated in the resqpy model.
 #
-input_gri_file = 'data/0.gri'
-mysurf = RegularSurface(input_gri_file)
+input_gri_file = pathlib.Path('data/0.gri')
+
+assert input_gri_file.exists(), "Add a test surface 0.gri under data"
+
+mysurf = xtgeo.surface_from_file(input_gri_file)
 nj,ni = mysurf.ncol, mysurf.nrow
 origin = (mysurf.xori, mysurf.yori, 0.0)
 di, dj = mysurf.xinc, mysurf.yinc
