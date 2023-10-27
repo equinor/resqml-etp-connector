@@ -161,3 +161,8 @@ cython_debug/
 
 # Vim swap
 *.swp
+
+# Files
+*.gri
+*.h5
+*.epc
