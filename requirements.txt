@@ -1,0 +1,8 @@
+numpy
+h5py
+requests
+lxml
+xtgeo
+resqpy
+
+etpclient @ git+https://github.com/equinor/etpclient-python@modifications_for_Grid2d_test
