@@ -79,22 +79,22 @@ mesh_uuid = model2.uuid(obj_type = 'Grid2dRepresentation', title = 'test_from_gr
 # Write the RESQML data to the ETP server
 # 
 
-# # Use with locally running open-etp-server 
-# args = {
-#     'host': '127.0.0.1',
-#     'port': '9002',
-#     'token': None
-# }
-
-# jwt_token = None
-jwt_token = "..."  # get token from azure CLI.  User must be part of the AAD group "rddms-users"
-
-
+# Use with locally running open-etp-server
 args = {
-    'host': 'interop-rddms.azure-api.net',
-    'port': '443',
-    'token': jwt_token
+    'host': '127.0.0.1',
+    'port': '9002',
+    'token': None
 }
+
+jwt_token = None
+# jwt_token = "..."  # get token from azure CLI.  User must be part of the AAD group "rddms-users"
+#
+#
+# args = {
+#     'host': 'interop-rddms.azure-api.net',
+#     'port': '443',
+#     'token': jwt_token
+# }
 
 
 wsm = openWebSocket(
