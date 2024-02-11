@@ -9,8 +9,9 @@ import resqpy.olio.uuid as bu
 import resqpy.unstructured as rug
 import resqpy.time_series as rts
 
-from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addDataspace, putDataObject, putDataObjectArray, getResources, getDataObject, getDataArray
-
+# from etpclient_helper import openWebSocket, getDataspaces, deleteDataspace, addDataspace, putDataObject, putDataObjectArray, getResources, getDataObject, getDataArray
+import map_api.utils
+import map_api.etp_client
 
 # ======================================================================
 #  imports of xsdata definitions and defintions of XML parser functions
@@ -66,7 +67,8 @@ def xml_to_dp(xlms):
 # ===========================================================
 # Read the input file (hexahedral mesh with properties)
 # ===========================================================
-input_mesh_file = 'data/model_hexa_0.epc'
+# input_mesh_file = 'data/model_hexa_0.epc'
+input_mesh_file = 'Q:/warmth/temp/model_hexa_0.epc'
 
 model = rq.Model(input_mesh_file)
 assert model is not None
@@ -101,54 +103,86 @@ hexa.check_hexahedral()
 mesh_uuid = hexa_uuid
 
 
+import asyncio
+
+import map_api.utils
+import map_api.etp_client
 
 # =======================================
 # Write the RESQML data to the ETP server
 # =======================================
 
-# Use with locally running open-etp-server
-args = {
-    'host': '127.0.0.1',
-    'port': '9002',
-    'token': None
-}
+etp_host = "ws://localhost:9002"
+dataspace = "pss_demo"
 
 jwt_token = None
+
+
+rddms_uris = asyncio.run(
+    map_api.etp_client.upload_epc_mesh_to_rddms(input_mesh_file, "hexamesh", 23031, etp_host, dataspace, "" )
+)
+
+# rddms_uris = ["eml:///dataspace('pss_demo')/eml20.EpcExternalPartReference(9ced6cb8-22ee-4e72-a880-c76513cf29ae)",
+#  "eml:///dataspace('pss_demo')/resqml20.LocalDepth3dCrs(fe147149-1ef5-43fc-a07e-3883d4d33ce1)",
+#  "eml:///dataspace('pss_demo')/resqml20.UnstructuredGridRepresentation(3ebf759b-bac1-11ee-a4b3-557654f85bb0)"]
+
+# download_resqml_mesh(rddms_uris, etp_server_url, dataspace, authorization):
+epc, crs, uns, points, nodes_per_face, nodes_per_face_cl, faces_per_cell, faces_per_cell_cl, cell_face_is_right_handed = \
+    asyncio.run(
+        map_api.etp_client.download_resqml_mesh(
+            rddms_uris, etp_host, dataspace, ""
+        )
+    )
+
 # jwt_token = "..."  # get token from azure CLI.  User must be part of the AAD group "rddms-users"
-#
-#
 # args = {
 #     'host': 'interop-rddms.azure-api.net',
 #     'port': '443',
 #     'token': jwt_token
 # }
 
+model_out = rq.new_model("returned-mesh-new.epc")
+crs = rqc.Crs(model_out)
+crs.create_xml()
 
-wsm = openWebSocket(
-    serv_url = args['host'],
-    serv_port = args['port'],
-    serv_sub_path = None,
-    serv_token = args['token'],
-)
+# create an empty HexaGrid
+hexa = rug.HexaGrid(model_out, title = uns.citation.title)
+assert hexa.cell_shape == 'hexahedral'
 
-dataspace = "demo/pss"
+hexa.crs_uuid = model_out.uuid(obj_type = 'LocalDepth3dCrs')
+assert hexa.crs_uuid is not None
 
-#
-# start from a clean dataspace (delete and recreate the dataspace)
-#
-gds = asyncio.run(
-    deleteDataspace(wsm, dataspace)
-)
-gds = asyncio.run(
-    addDataspace(wsm, dataspace)
-)
+# cells
+hexa.set_cell_count(uns.cell_count)
 
-#
-# write the data object.  this does not yet write the data arrays
-#
-pdo = asyncio.run(
-    putDataObject(wsm, input_mesh_file, dataspace)
-)
+# faces
+hexa.face_count = uns.geometry.face_count
+hexa.faces_per_cell_cl = faces_per_cell_cl
+hexa.faces_per_cell = faces_per_cell
+
+# nodes
+hexa.node_count = uns.geometry.node_count
+hexa.nodes_per_face_cl = nodes_per_face_cl
+hexa.nodes_per_face = nodes_per_face
+
+# face handedness
+hexa.cell_face_is_right_handed = cell_face_is_right_handed  # False for all faces for external cells
+
+# points
+hexa.points_cached = points
+
+# basic validity check
+hexa.check_hexahedral()
+
+# write arrays, create xml and store model
+hexa.write_hdf5()
+hexa.create_xml()
+
+model_out.store_epc()
+
+
+
+
 
 
 
@@ -156,6 +190,7 @@ pdo = asyncio.run(
 
 # ==================================================================================================
 #  In order to write the data arrays: read back the DataObjects and parse for "path in hdf5"
+#    NOTE: this is unnecessary! we can read the path in hdf from the resqpy object
 # ==================================================================================================
 
 guid4 = str(hexa_uuid)  # Guid of target object
@@ -186,10 +221,12 @@ for ii,ds in enumerate(gds):
             vv = list(res1.values())[0]
             if ('ContinuousProperty' in vv.resource.uri):
                 cp = xml_to_cp(vv.data.decode('utf-8'))
-                cps.append(cp)
+                if cp.supporting_representation.uuid==str(hexa_uuid):
+                    cps.append(cp)
             if ('DiscreteProperty' in vv.resource.uri):
                 dp = xml_to_dp(vv.data.decode('utf-8'))
-                dps.append(dp)
+                if dp.supporting_representation.uuid==str(hexa_uuid):
+                    dps.append(dp)
 
 
 
@@ -303,6 +340,7 @@ put_array_dict = {'dataArrays':
 #  
 prop_titles=['Temperature', 'Age', 'LayerID', 'Porosity_initial', 'Porosity_decay', 'Density_solid', 'insulance_thermal', 'Radiogenic_heat_production']
 
+title="Age"
 for title in prop_titles:
     prop_uuid = model.uuid(title = title)
     prop = rqp.Property(model, uuid = prop_uuid)
