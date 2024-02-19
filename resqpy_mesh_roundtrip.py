@@ -107,6 +107,7 @@ import asyncio
 
 import map_api.utils
 import map_api.etp_client
+input_mesh_file = 'Q:/warmth/temp/model_hexa_0.epc'
 
 # =======================================
 # Write the RESQML data to the ETP server
@@ -117,9 +118,23 @@ dataspace = "pss_demo"
 
 jwt_token = None
 
+model = rq.Model(input_mesh_file)
+assert model is not None
 
-rddms_uris = asyncio.run(
-    map_api.etp_client.upload_epc_mesh_to_rddms(input_mesh_file, "hexamesh", 23031, etp_host, dataspace, "" )
+hexa_uuids = model.uuids(obj_type = 'UnstructuredGridRepresentation')
+assert len(hexa_uuids)==1
+hexa_uuid = hexa_uuids[0]
+hexa = rug.HexaGrid(model, uuid = hexa_uuid)
+assert hexa is not None
+
+# property_titles = ['Temperature', 'Age', 'LayerID', 'Porosity_initial', 'Porosity_decay', 'Density_solid', 'insulance_thermal', 'Radiogenic_heat_production']
+uuids = model.uuids(obj_type = 'ContinuousProperty')
+prop_titles = [rqp.Property(model, uuid=u).title for u in uuids]
+uuids = model.uuids(obj_type = 'DiscreteProperty')
+prop_titles = prop_titles + [rqp.Property(model, uuid=u).title for u in uuids]
+
+rddms_uris, prop_uris = asyncio.run(
+    map_api.etp_client.upload_epc_mesh_to_rddms(input_mesh_file, hexa.title, prop_titles, 23031, etp_host, dataspace, "" )
 )
 
 # rddms_uris = ["eml:///dataspace('pss_demo')/eml20.EpcExternalPartReference(9ced6cb8-22ee-4e72-a880-c76513cf29ae)",
@@ -133,6 +148,7 @@ epc, crs, uns, points, nodes_per_face, nodes_per_face_cl, faces_per_cell, faces_
             rddms_uris, etp_host, dataspace, ""
         )
     )
+
 
 # jwt_token = "..."  # get token from azure CLI.  User must be part of the AAD group "rddms-users"
 # args = {
@@ -177,6 +193,42 @@ hexa.check_hexahedral()
 # write arrays, create xml and store model
 hexa.write_hdf5()
 hexa.create_xml()
+
+
+for k in list(prop_uris.keys()):
+    cp, pk, values = \
+        asyncio.run(
+            map_api.etp_client.download_resqml_mesh_property(
+                prop_uris[k], epc, etp_host, dataspace, ""
+            )
+        )
+    print(f"Property {k} values shape {values.shape} and mean {np.mean(values)}.  ")
+
+
+# prop_name = 'Temperature'
+for prop_name in prop_uris.keys():
+    cp, pk, values = \
+        asyncio.run(
+            map_api.etp_client.download_resqml_mesh_property(
+                prop_uris[prop_name], epc, etp_host, dataspace, ""
+            )
+        )
+    is_continuous = type(cp)==map_api.resqml_objects.generated.ContinuousProperty
+    if type(cp.property_kind)==map_api.resqml_objects.generated.LocalPropertyKind: 
+        pk_title = cp.property_kind.local_property_kind.title 
+    else:
+        pk_title = cp.property_kind.kind.value
+
+    _ = rqp.Property.from_array(model_out,
+                                values,
+                                source_info = cp.citation.originator,
+                                keyword = prop_name,
+                                support_uuid = hexa.uuid,
+                                property_kind = pk_title,
+                                indexable_element = cp.indexable_element.value,
+                                uom = cp.uom if is_continuous else "Euc",
+                                discrete = not is_continuous) 
+ 
 
 model_out.store_epc()
 

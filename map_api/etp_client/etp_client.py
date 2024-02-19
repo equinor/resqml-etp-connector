@@ -260,9 +260,15 @@ async def upload_resqml_mesh_property(
         # records = await etp_helper.put_dataspaces(ws, msg_id, [dataspace])
         # assert len(records) == 1
 
-        rddms_urls = await upload_resqml_objects(
-            ws, msg_id, max_payload_size, dataspace, [propkind, cprop0]
-        )
+        if (propkind is None):
+            rddms_urls = await upload_resqml_objects(
+                ws, msg_id, max_payload_size, dataspace, [cprop0]
+            )
+            rddms_urls = [""] + rddms_urls
+        else:            
+            rddms_urls = await upload_resqml_objects(
+                ws, msg_id, max_payload_size, dataspace, [propkind, cprop0]
+            )
 
         records = await upload_array(
             ws,
@@ -468,6 +474,101 @@ async def download_array(
     return np.concatenate(blocks, axis=0)
 
 
+# 
+async def download_resqml_mesh_property(prop_uris, epc, etp_server_url, dataspace, authorization):
+    # NOTE: 
+    # assert len(prop_uris) == 2
+
+    headers = {"Authorization": authorization}
+
+    async with websockets.connect(
+        etp_server_url,
+        extra_headers=headers,
+        subprotocols=["etp12.energistics.org"],
+        max_size=MAX_WEBSOCKET_MESSAGE_SIZE,
+    ) as ws:
+        msg_id = etp_helper.ClientMessageId()
+        records = await etp_helper.request_session(
+            ws,
+            msg_id,
+            max_payload_size=MAX_WEBSOCKET_MESSAGE_SIZE,
+            application_name=APPLICATION_NAME,
+            application_version=APPLICATION_VERSION,
+        )
+
+        # TODO: Use the max_payload_size to ensure that data is downloaded in
+        # chunks when needed.
+        max_payload_size = records[0]["endpointCapabilities"][
+            "MaxWebSocketMessagePayloadSize"
+        ]["item"]
+
+        use_local_propertykind = len(prop_uris[0])>0
+        print("prop_uris", prop_uris, use_local_propertykind)
+
+
+        # Download the grid objects.
+        if (use_local_propertykind):
+            records = await etp_helper.get_data_objects(ws, msg_id, prop_uris)
+        else:
+            records = await etp_helper.get_data_objects(ws, msg_id, prop_uris[1:])
+
+        print("records", records)
+
+        # NOTE: Here we assume that all three objects fit in a single record
+        data_objects = records[0]["dataObjects"]
+        # NOTE: This test will not work in case of too large objects as the
+        # records will be chunks. If so these should be assembled before being
+        # returned here.
+
+        assert len(data_objects) == len(prop_uris) - (0 if use_local_propertykind else 1)
+
+        returned_resqml = read_returned_resqml_objects(data_objects)
+
+        # NOTE: In case there are multiple objects of a single type (not in
+        # this call, but in other functions) we can replace "next" by "list"
+        # (or just keep the generator from "filter" as-is) to sort out all the
+        # relevant objects.
+        if (use_local_propertykind):
+            propkind = next(
+                filter(
+                    lambda x: isinstance(x, resqml_objects.PropertyKind ),
+                    returned_resqml,
+                )
+            )
+        else:
+            propkind = None
+
+        try:
+            prop = next(
+                filter(
+                    lambda x: isinstance(x, resqml_objects.ContinuousProperty ),
+                    returned_resqml,
+                )
+            )
+        except StopIteration:
+            prop = next(
+                filter(
+                    lambda x: isinstance(x, resqml_objects.DiscreteProperty ),
+                    returned_resqml,
+                )
+            )
+
+
+        values = await download_array( 
+            ws, msg_id, max_payload_size, dataspace, epc,
+            prop.patch_of_values[0].values.values.path_in_hdf_file 
+        )
+
+        # Close session.
+        await etp_helper.close_session(ws, msg_id, "Done downloading mesh property")
+
+    # Return objects and array
+    return prop, propkind, values
+
+
+
+
+
 
 async def download_resqml_mesh(rddms_uris, etp_server_url, dataspace, authorization):
     # NOTE: This assumes that a "resqml-surface" consists of a
@@ -660,21 +761,24 @@ async def upload_xtgeo_surface_to_rddms(
     )
 
 async def upload_epc_mesh_to_rddms(
-    epc_filename, title_in, projected_epsg, etp_server_url, dataspace, authorization
+    epc_filename, title_in, property_titles, projected_epsg, etp_server_url, dataspace, authorization,
 ):
-    # uns, crs, epc = map_api.etp_client.convert_resqpy_mesh_to_resqml_mesh(None,"a",None)
     uns, crs, epc, hexa = convert_resqpy_mesh_to_resqml_mesh(epc_filename, title_in, projected_epsg)
     uns_rddms_uris = await upload_resqml_mesh(
         uns, crs, epc, hexa, etp_server_url, dataspace, authorization
     )
-    cprop0, prop, propertykind0 = convert_resqpy_mesh_property_to_resqml_mesh(epc_filename, hexa, "Age", uns, epc )
 
-    prop_rddms_uris = await upload_resqml_mesh_property(
-        prop, cprop0, propertykind0, epc, etp_server_url, dataspace, authorization
-    )
-    print("===== prop_rddms_uris  ", prop_rddms_uris)
+    # property_titles = ['Temperature', 'Age', 'LayerID', 'Porosity_initial', 'Porosity_decay', 'Density_solid', 'insulance_thermal', 'Radiogenic_heat_production']
+    prop_rddms_uris = {}
 
-    return uns_rddms_uris
+    for propname in property_titles:
+        cprop0, prop, propertykind0 = convert_resqpy_mesh_property_to_resqml_mesh(epc_filename, hexa, propname, uns, epc )
+        prop_rddms_uri = await upload_resqml_mesh_property(
+            prop, cprop0, propertykind0, epc, etp_server_url, dataspace, authorization
+        )
+        prop_rddms_uris[propname] = prop_rddms_uri
+    
+    return uns_rddms_uris, prop_rddms_uris
     
 
 
@@ -882,7 +986,13 @@ def convert_resqpy_mesh_to_resqml_mesh(epc_filename, title_in, projected_epsg):
     return uns, crs, epc, hexa
 
 def convert_resqpy_mesh_property_to_resqml_mesh(epc_filename, hexa, prop_title, uns, epc ):
-    import resqpy.property as rqp 
+    import resqpy.property as rqp
+    import resqpy.crs as rqc
+    import resqpy.model as rq
+    import resqpy.olio.uuid as bu
+    import resqpy.unstructured as rug
+    import resqpy.time_series as rts
+    import resqpy.crs as rcrs    
     import numpy as np
     
     common_citation_fields = dict(
@@ -906,28 +1016,33 @@ def convert_resqpy_mesh_property_to_resqml_mesh(epc_filename, hexa, prop_title, 
     #     prop = rqp.Property(model, uuid = prop_uuid)
     #     print(title, prop.indexable_element(), prop.uom(), prop.array_ref()[0:10] )
 
-    prop_uuid = model.uuid(title = "Age")  # prop_title
+    prop_uuid = model.uuid(title = prop_title)  # prop_title
     prop = rqp.Property(model, uuid = prop_uuid)
-    pk = rqp.PropertyKind( model, uuid = prop.local_property_kind_uuid() )
 
-    propertykind0 = resqml_objects.PropertyKind(
-        schema_version = schema_version,
-        citation=resqml_objects.Citation(
-                title=hexa.title,
-                **common_citation_fields,
-            ),        
-        naming_system = "urn:resqml:bp.com:resqpy",
-        is_abstract = False,
-        representative_uom = "y",
-        parent_property_kind = resqml_objects.StandardPropertyKind(
-            kind = "continuous",
-        ),
-        uuid = str(pk.uuid),
-    )
+    continuous = prop.is_continuous()
+
+    if (prop.local_property_kind_uuid() is None):
+        propertykind0 = None
+    else:
+        pk = rqp.PropertyKind( model, uuid = prop.local_property_kind_uuid() )
+        propertykind0 = resqml_objects.PropertyKind(
+            schema_version = schema_version,
+            citation=resqml_objects.Citation(
+                    title=f"{prop_title}",
+                    **common_citation_fields,
+                ),        
+            naming_system = "urn:resqml:bp.com:resqpy",
+            is_abstract = False,
+            representative_uom = "y",
+            parent_property_kind = resqml_objects.StandardPropertyKind(
+                kind = "continuous" if continuous else "discrete",
+            ),
+            uuid = str(pk.uuid),
+        )
 
     pov = resqml_objects.PatchOfValues(
-        # representation_patch_index = 0,
-        values = resqml_objects.DoubleHdf5Array(
+        values = \
+        resqml_objects.DoubleHdf5Array(
             values = resqml_objects.Hdf5Dataset(
                 path_in_hdf_file=f"/RESQML/{str(prop_uuid)}/values",
                 hdf_proxy=resqml_objects.DataObjectReference(
@@ -936,40 +1051,83 @@ def convert_resqpy_mesh_property_to_resqml_mesh(epc_filename, hexa, prop_title, 
                     uuid=str(epc.uuid),
                 ),                
             )
-        ),
+        ) if continuous else \
+        resqml_objects.IntegerHdf5Array(
+            values = resqml_objects.Hdf5Dataset(
+                path_in_hdf_file=f"/RESQML/{str(prop_uuid)}/values",
+                hdf_proxy=resqml_objects.DataObjectReference(
+                    content_type=f"application/x-eml+xml;version={schema_version};type={get_data_object_type(epc)}",
+                    title=epc.citation.title,
+                    uuid=str(epc.uuid),
+                ),                
+            ),
+            null_value = 1e30,
+        )            
     )
 
-    cprop0 = resqml_objects.ContinuousProperty(
-        schema_version = schema_version,
-        citation=resqml_objects.Citation(
-                title=prop_title,
-                **common_citation_fields,
-            ),       
-        uuid = str(prop.uuid),
-        uom = prop.uom(),
-        count = 1,
-        indexable_element = "nodes", # "cells"
-        supporting_representation = resqml_objects.DataObjectReference(
-                content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(uns)}",
-                title=uns.citation.title,
-                uuid=uns.uuid,
-            ),
-        property_kind = resqml_objects.LocalPropertyKind(
-            local_property_kind = resqml_objects.DataObjectReference(
-                content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(propertykind0)}",
-                title=propertykind0.citation.title,
-                uuid=propertykind0.uuid,
-            ),
-        ),
-        minimum_value = prop.minimum_value(),
-        maximum_value = prop.maximum_value(),
-        facet = resqml_objects.PropertyKindFacet(
-            facet = prop.facet_type(),
-            value = prop.facet(),
-        ),
-        patch_of_values = [pov],     
-    )
-    
+    if (continuous):    
+        cprop0 = resqml_objects.ContinuousProperty(
+            schema_version = schema_version,
+            citation=resqml_objects.Citation(
+                    title=prop_title,
+                    **common_citation_fields,
+                ),       
+            uuid = str(prop.uuid),
+            uom = prop.uom(),
+            count = 1,
+            indexable_element = prop.indexable_element(),
+            supporting_representation = resqml_objects.DataObjectReference(
+                    content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(uns)}",
+                    title=uns.citation.title,
+                    uuid=uns.uuid,
+                ),
+            property_kind = resqml_objects.LocalPropertyKind(
+                    local_property_kind = resqml_objects.DataObjectReference(
+                        content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(propertykind0)}",
+                        title=propertykind0.citation.title,
+                        uuid=propertykind0.uuid,
+                    ) 
+                ) if (propertykind0 is not None) else resqml_objects.StandardPropertyKind(kind= prop.property_kind()),
+            minimum_value = prop.minimum_value(),
+            maximum_value = prop.maximum_value(),
+            facet = [resqml_objects.PropertyKindFacet(
+                facet = resqml_objects.Facet.WHAT,
+                value = prop_title, # prop.facet(),
+            )],
+            patch_of_values = [pov],     
+        )
+    else:
+        cprop0 = resqml_objects.DiscreteProperty(
+            schema_version = schema_version,
+            citation=resqml_objects.Citation(
+                    title=prop_title,
+                    **common_citation_fields,
+                ),       
+            uuid = str(prop.uuid),
+            # uom = prop.uom(),
+            count = 1,
+            indexable_element = prop.indexable_element(),
+            supporting_representation = resqml_objects.DataObjectReference(
+                    content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(uns)}",
+                    title=uns.citation.title,
+                    uuid=uns.uuid,
+                ),
+            property_kind = resqml_objects.LocalPropertyKind(
+                    local_property_kind = resqml_objects.DataObjectReference(
+                        content_type=f"application/x-resqml+xml;version={schema_version};type={get_data_object_type(propertykind0)}",
+                        title=propertykind0.citation.title,
+                        uuid=propertykind0.uuid,
+                    )
+                ) if (propertykind0 is not None) else resqml_objects.StandardPropertyKind(kind= prop.property_kind()),
+            minimum_value = prop.minimum_value(),
+            maximum_value = prop.maximum_value(),
+            facet = [resqml_objects.PropertyKindFacet(
+                facet = resqml_objects.Facet.WHAT,
+                value = prop_title, # prop.facet(),
+            )],
+            patch_of_values = [pov],     
+        )
+
     return cprop0, prop, propertykind0
 
 
@@ -1143,12 +1301,12 @@ def read_returned_resqml_objects(data_objects):
     # Set up an XML-parser from xsdata.
     parser = XmlParser(context=XmlContext())
 
-    print("=========== read_returned_resqml_objects =======")
-    for do in data_objects.values():
-        print("=============", ET.fromstring(do["data"]).tag)
-        print(do["data"])
-        print("=======================================")
-        print("")
+    # print("=========== read_returned_resqml_objects =======")
+    # for do in data_objects.values():
+    #     print("=============", ET.fromstring(do["data"]).tag)
+    #     print(do["data"])
+    #     print("=======================================")
+    #     print("")
 
     return [
         parser.from_bytes(

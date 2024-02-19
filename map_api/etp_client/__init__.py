@@ -6,4 +6,5 @@ from .etp_client import (
     delete_resqml_objects,
     convert_xtgeo_surface_to_resqml_grid,
     convert_resqpy_mesh_to_resqml_mesh,
+    download_resqml_mesh_property,
 )
